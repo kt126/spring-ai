@@ -26,11 +26,14 @@ import org.springframework.ai.tool.StaticToolCallbackProvider;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.ai.tool.annotation.Tool;
+import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.ai.tool.execution.DefaultToolExecutionExceptionProcessor;
+import org.springframework.ai.tool.execution.ToolExecutionException;
 import org.springframework.ai.tool.execution.ToolExecutionExceptionProcessor;
 import org.springframework.ai.tool.function.FunctionToolCallback;
 import org.springframework.ai.tool.method.MethodToolCallback;
 import org.springframework.ai.tool.method.MethodToolCallbackProvider;
+import org.springframework.ai.tool.observation.ToolCallingContentObservationFilter;
 import org.springframework.ai.tool.resolution.DelegatingToolCallbackResolver;
 import org.springframework.ai.tool.resolution.ToolCallbackResolver;
 import org.springframework.ai.tool.support.ToolDefinitions;
@@ -108,6 +111,77 @@ class ToolCallingAutoConfigurationTests {
 				assertThat(toolCallbackResolver).isInstanceOf(DelegatingToolCallbackResolver.class);
 
 				assertThat(toolCallbackResolver.resolve("NonExisting")).isNull();
+			});
+	}
+
+	@Test
+	void observationFilterDefault() {
+		new ApplicationContextRunner().withConfiguration(AutoConfigurations.of(ToolCallingAutoConfiguration.class))
+			.withUserConfiguration(Config.class)
+			.run(context -> assertThat(context).doesNotHaveBean(ToolCallingContentObservationFilter.class));
+	}
+
+	@Test
+	void observationFilterEnabled() {
+		new ApplicationContextRunner().withConfiguration(AutoConfigurations.of(ToolCallingAutoConfiguration.class))
+			.withPropertyValues("spring.ai.tools.observations.include-content=true")
+			.withUserConfiguration(Config.class)
+			.run(context -> assertThat(context).hasSingleBean(ToolCallingContentObservationFilter.class));
+	}
+
+	@Test
+	void throwExceptionOnErrorDefault() {
+		new ApplicationContextRunner().withConfiguration(AutoConfigurations.of(ToolCallingAutoConfiguration.class))
+			.withUserConfiguration(Config.class)
+			.run(context -> {
+				var toolExecutionExceptionProcessor = context.getBean(ToolExecutionExceptionProcessor.class);
+				assertThat(toolExecutionExceptionProcessor).isInstanceOf(DefaultToolExecutionExceptionProcessor.class);
+
+				// Test behavior instead of accessing private field
+				// Create a mock tool definition and exception
+				var toolDefinition = ToolDefinition.builder()
+					.name("testTool")
+					.description("Test tool for exception handling")
+					.inputSchema("{\"type\":\"object\",\"properties\":{\"test\":{\"type\":\"string\"}}}")
+					.build();
+				var cause = new RuntimeException("Test error");
+				var exception = new ToolExecutionException(toolDefinition, cause);
+
+				// Default behavior should not throw exception
+				String result = toolExecutionExceptionProcessor.process(exception);
+				assertThat(result).isEqualTo("Test error");
+			});
+	}
+
+	@Test
+	void throwExceptionOnErrorEnabled() {
+		new ApplicationContextRunner().withConfiguration(AutoConfigurations.of(ToolCallingAutoConfiguration.class))
+			.withPropertyValues("spring.ai.tools.throw-exception-on-error=true")
+			.withUserConfiguration(Config.class)
+			.run(context -> {
+				var toolExecutionExceptionProcessor = context.getBean(ToolExecutionExceptionProcessor.class);
+				assertThat(toolExecutionExceptionProcessor).isInstanceOf(DefaultToolExecutionExceptionProcessor.class);
+
+				// Test behavior instead of accessing private field
+				// Create a mock tool definition and exception
+				var toolDefinition = ToolDefinition.builder()
+					.name("testTool")
+					.description("Test tool for exception handling")
+					.inputSchema("{\"type\":\"object\",\"properties\":{\"test\":{\"type\":\"string\"}}}")
+					.build();
+				var cause = new RuntimeException("Test error");
+				var exception = new ToolExecutionException(toolDefinition, cause);
+
+				// When property is set to true, it should throw the exception
+				assertThat(toolExecutionExceptionProcessor).extracting(processor -> {
+					try {
+						processor.process(exception);
+						return "No exception thrown";
+					}
+					catch (ToolExecutionException e) {
+						return "Exception thrown";
+					}
+				}).isEqualTo("Exception thrown");
 			});
 	}
 

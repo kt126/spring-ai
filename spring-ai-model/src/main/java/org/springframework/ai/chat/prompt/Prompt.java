@@ -128,6 +128,20 @@ public class Prompt implements ModelRequest<List<Message>> {
 		return new UserMessage("");
 	}
 
+	/**
+	 * Get all user messages in the prompt.
+	 * @return a list of all user messages in the prompt
+	 */
+	public List<UserMessage> getUserMessages() {
+		List<UserMessage> userMessages = new ArrayList<>();
+		for (Message message : this.messages) {
+			if (message instanceof UserMessage userMessage) {
+				userMessages.add(userMessage);
+			}
+		}
+		return userMessages;
+	}
+
 	@Override
 	public String toString() {
 		return "Prompt{" + "messages=" + this.messages + ", modelOptions=" + this.chatOptions + '}';
@@ -163,8 +177,11 @@ public class Prompt implements ModelRequest<List<Message>> {
 				messagesCopy.add(systemMessage.copy());
 			}
 			else if (message instanceof AssistantMessage assistantMessage) {
-				messagesCopy.add(new AssistantMessage(assistantMessage.getText(), assistantMessage.getMetadata(),
-						assistantMessage.getToolCalls()));
+				messagesCopy.add(AssistantMessage.builder()
+					.content(assistantMessage.getText())
+					.properties(assistantMessage.getMetadata())
+					.toolCalls(assistantMessage.getToolCalls())
+					.build());
 			}
 			else if (message instanceof ToolResponseMessage toolResponseMessage) {
 				messagesCopy.add(new ToolResponseMessage(new ArrayList<>(toolResponseMessage.getResponses()),
@@ -184,21 +201,21 @@ public class Prompt implements ModelRequest<List<Message>> {
 	 * @return a new {@link Prompt} instance with the augmented system message.
 	 */
 	public Prompt augmentSystemMessage(Function<SystemMessage, SystemMessage> systemMessageAugmenter) {
-
 		var messagesCopy = new ArrayList<>(this.messages);
-		for (int i = 0; i <= this.messages.size() - 1; i++) {
+		boolean found = false;
+		for (int i = 0; i < messagesCopy.size(); i++) {
 			Message message = messagesCopy.get(i);
 			if (message instanceof SystemMessage systemMessage) {
 				messagesCopy.set(i, systemMessageAugmenter.apply(systemMessage));
+				found = true;
 				break;
 			}
-			if (i == 0) {
-				// If no system message is found, create a new one with the provided text
-				// and add it as the first item in the list.
-				messagesCopy.add(0, systemMessageAugmenter.apply(new SystemMessage("")));
-			}
 		}
-
+		if (!found) {
+			// If no system message is found, create a new one with the provided text
+			// and add it as the first item in the list.
+			messagesCopy.add(0, systemMessageAugmenter.apply(new SystemMessage("")));
+		}
 		return new Prompt(messagesCopy, null == this.chatOptions ? null : this.chatOptions.copy());
 	}
 

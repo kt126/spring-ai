@@ -21,6 +21,7 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
+import java.util.stream.Collectors;
 
 import com.fasterxml.jackson.annotation.JsonFormat;
 import com.fasterxml.jackson.annotation.JsonIgnore;
@@ -28,6 +29,7 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonInclude.Include;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -62,8 +64,16 @@ import org.springframework.web.reactive.function.client.WebClient;
  * @author Thomas Vitale
  * @author David Frizelle
  * @author Alexandros Pappas
+ * @author Filip Hrisafov
  */
 public class OpenAiApi {
+
+	/**
+	 * Returns a builder pre-populated with the current configuration for mutation.
+	 */
+	public Builder mutate() {
+		return new Builder(this);
+	}
 
 	public static Builder builder() {
 		return new Builder();
@@ -75,9 +85,18 @@ public class OpenAiApi {
 
 	private static final Predicate<String> SSE_DONE_PREDICATE = "[DONE]"::equals;
 
+	// Store config fields for mutate/copy
+	private final String baseUrl;
+
+	private final ApiKey apiKey;
+
+	private final MultiValueMap<String, String> headers;
+
 	private final String completionsPath;
 
 	private final String embeddingsPath;
+
+	private final ResponseErrorHandler responseErrorHandler;
 
 	private final RestClient restClient;
 
@@ -99,19 +118,19 @@ public class OpenAiApi {
 	public OpenAiApi(String baseUrl, ApiKey apiKey, MultiValueMap<String, String> headers, String completionsPath,
 			String embeddingsPath, RestClient.Builder restClientBuilder, WebClient.Builder webClientBuilder,
 			ResponseErrorHandler responseErrorHandler) {
+		this.baseUrl = baseUrl;
+		this.apiKey = apiKey;
+		this.headers = headers;
+		this.completionsPath = completionsPath;
+		this.embeddingsPath = embeddingsPath;
+		this.responseErrorHandler = responseErrorHandler;
 
 		Assert.hasText(completionsPath, "Completions Path must not be null");
 		Assert.hasText(embeddingsPath, "Embeddings Path must not be null");
 		Assert.notNull(headers, "Headers must not be null");
 
-		this.completionsPath = completionsPath;
-		this.embeddingsPath = embeddingsPath;
 		// @formatter:off
 		Consumer<HttpHeaders> finalHeaders = h -> {
-			if (!(apiKey instanceof NoopApiKey)) {
-				h.setBearerAuth(apiKey.getValue());
-			}
-
 			h.setContentType(MediaType.APPLICATION_JSON);
 			h.addAll(headers);
 		};
@@ -127,11 +146,20 @@ public class OpenAiApi {
 			.build(); // @formatter:on
 	}
 
+	/**
+	 * Returns a string containing all text values from the given media content list. Only
+	 * elements of type "text" are processed and concatenated in order.
+	 * @param content The list of {@link ChatCompletionMessage.MediaContent}
+	 * @return a string containing all text values from "text" type elements
+	 * @throws IllegalArgumentException if content is null
+	 */
 	public static String getTextContent(List<ChatCompletionMessage.MediaContent> content) {
+		Assert.notNull(content, "content cannot be null");
+
 		return content.stream()
 			.filter(c -> "text".equals(c.type()))
 			.map(ChatCompletionMessage.MediaContent::text)
-			.reduce("", (a, b) -> a + b);
+			.collect(Collectors.joining());
 	}
 
 	/**
@@ -159,12 +187,17 @@ public class OpenAiApi {
 		Assert.isTrue(!chatRequest.stream(), "Request must set the stream property to false.");
 		Assert.notNull(additionalHttpHeader, "The additional HTTP headers can not be null.");
 
+		// @formatter:off
 		return this.restClient.post()
 			.uri(this.completionsPath)
-			.headers(headers -> headers.addAll(additionalHttpHeader))
+			.headers(headers -> {
+				headers.addAll(additionalHttpHeader);
+				addDefaultHeadersIfMissing(headers);
+			})
 			.body(chatRequest)
 			.retrieve()
 			.toEntity(ChatCompletion.class);
+		// @formatter:on
 	}
 
 	/**
@@ -193,9 +226,13 @@ public class OpenAiApi {
 
 		AtomicBoolean isInsideTool = new AtomicBoolean(false);
 
+		// @formatter:off
 		return this.webClient.post()
 			.uri(this.completionsPath)
-			.headers(headers -> headers.addAll(additionalHttpHeader))
+			.headers(headers -> {
+				headers.addAll(additionalHttpHeader);
+				addDefaultHeadersIfMissing(headers);
+			}) // @formatter:on
 			.body(Mono.just(chatRequest), ChatCompletionRequest.class)
 			.retrieve()
 			.bodyToFlux(String.class)
@@ -269,11 +306,43 @@ public class OpenAiApi {
 
 		return this.restClient.post()
 			.uri(this.embeddingsPath)
+			.headers(this::addDefaultHeadersIfMissing)
 			.body(embeddingRequest)
 			.retrieve()
 			.toEntity(new ParameterizedTypeReference<>() {
 
 			});
+	}
+
+	private void addDefaultHeadersIfMissing(HttpHeaders headers) {
+		if (!headers.containsKey(HttpHeaders.AUTHORIZATION) && !(this.apiKey instanceof NoopApiKey)) {
+			headers.setBearerAuth(this.apiKey.getValue());
+		}
+	}
+
+	// Package-private getters for mutate/copy
+	String getBaseUrl() {
+		return this.baseUrl;
+	}
+
+	ApiKey getApiKey() {
+		return this.apiKey;
+	}
+
+	MultiValueMap<String, String> getHeaders() {
+		return this.headers;
+	}
+
+	String getCompletionsPath() {
+		return this.completionsPath;
+	}
+
+	String getEmbeddingsPath() {
+		return this.embeddingsPath;
+	}
+
+	ResponseErrorHandler getResponseErrorHandler() {
+		return this.responseErrorHandler;
 	}
 
 	/**
@@ -399,6 +468,52 @@ public class OpenAiApi {
 		 * See: <a href="https://platform.openai.com/docs/models/gpt-4.1">gpt-4.1</a>
 		 */
 		GPT_4_1("gpt-4.1"),
+
+		/**
+		 * <b>GPT-5</b> is the next-generation flagship model with enhanced capabilities
+		 * for complex reasoning and problem-solving tasks.
+		 * <p>
+		 * Note: GPT-5 models require temperature=1.0 (default value). Custom temperature
+		 * values are not supported and will cause errors.
+		 * <p>
+		 * Model ID: gpt-5
+		 * <p>
+		 * See: <a href="https://platform.openai.com/docs/models/gpt-5">gpt-5</a>
+		 */
+		GPT_5("gpt-5"),
+
+		/**
+		 * GPT-5 mini is a faster, more cost-efficient version of GPT-5. It's great for
+		 * well-defined tasks and precise prompts.
+		 * <p>
+		 * Model ID: gpt-5-mini
+		 * <p>
+		 * See:
+		 * <a href="https://platform.openai.com/docs/models/gpt-5-mini">gpt-5-mini</a>
+		 */
+		GPT_5_MINI("gpt-5-mini"),
+
+		/**
+		 * GPT-5 Nano is the fastest, cheapest version of GPT-5. It's great for
+		 * summarization and classification tasks.
+		 * <p>
+		 * Model ID: gpt-5-nano
+		 * <p>
+		 * See:
+		 * <a href="https://platform.openai.com/docs/models/gpt-5-nano">gpt-5-nano</a>
+		 */
+		GPT_5_NANO("gpt-5-nano"),
+
+		/**
+		 * GPT-5 Chat points to the GPT-5 snapshot currently used in ChatGPT. GPT-5
+		 * accepts both text and image inputs, and produces text outputs.
+		 * <p>
+		 * Model ID: gpt-5-chat-latest
+		 * <p>
+		 * See: <a href=
+		 * "https://platform.openai.com/docs/models/gpt-5-chat-latest">gpt-5-chat-latest</a>
+		 */
+		GPT_5_CHAT_LATEST("gpt-5-chat-latest"),
 
 		/**
 		 * <b>GPT-4o</b> (“o” for “omni”) is the versatile, high-intelligence flagship
@@ -590,7 +705,21 @@ public class OpenAiApi {
 		 * Context window: 4,096 tokens. Max output tokens: 4,096 tokens. Knowledge
 		 * cutoff: September, 2021.
 		 */
-		GPT_3_5_TURBO_INSTRUCT("gpt-3.5-turbo-instruct");
+		GPT_3_5_TURBO_INSTRUCT("gpt-3.5-turbo-instruct"),
+
+		/**
+		 * <b>GPT-4o Search Preview</b> is a specialized model for web search in Chat
+		 * Completions. It is trained to understand and execute web search queries. See
+		 * the web search guide for more information.
+		 */
+		GPT_4_O_SEARCH_PREVIEW("gpt-4o-search-preview"),
+
+		/**
+		 * <b>GPT-4o mini Search Preview</b> is a specialized model for web search in Chat
+		 * Completions. It is trained to understand and execute web search queries. See
+		 * the web search guide for more information.
+		 */
+		GPT_4_O_MINI_SEARCH_PREVIEW("gpt-4o-mini-search-preview");
 
 		public final String value;
 
@@ -868,7 +997,7 @@ public class OpenAiApi {
 	}
 
 	/**
-	 * Creates a model response for the given chat conversation.
+	 * Creates a model request for the given chat conversation.
 	 *
 	 * @param messages A list of messages comprising the conversation so far.
 	 * @param model ID of the model to use.
@@ -951,6 +1080,11 @@ public class OpenAiApi {
 	 * @param parallelToolCalls If set to true, the model will call all functions in the
 	 * tools list in parallel. Otherwise, the model will call the functions in the tools
 	 * list in the order they are provided.
+	 * @param reasoningEffort Constrains effort on reasoning for reasoning models.
+	 * Currently supported values are low, medium, and high. Reducing reasoning effort can
+	 * result in faster responses and fewer tokens used on reasoning in a response.
+	 * @param webSearchOptions Options for web search.
+	 * @param verbosity Controls the verbosity of the model's response.
 	 */
 	@JsonInclude(Include.NON_NULL)
 	public record ChatCompletionRequest(// @formatter:off
@@ -980,7 +1114,9 @@ public class OpenAiApi {
 			@JsonProperty("tool_choice") Object toolChoice,
 			@JsonProperty("parallel_tool_calls") Boolean parallelToolCalls,
 			@JsonProperty("user") String user,
-			@JsonProperty("reasoning_effort") String reasoningEffort) {
+			@JsonProperty("reasoning_effort") String reasoningEffort,
+			@JsonProperty("web_search_options") WebSearchOptions webSearchOptions,
+			@JsonProperty("verbosity") String verbosity)  {
 
 		/**
 		 * Shortcut constructor for a chat completion request with the given messages, model and temperature.
@@ -992,7 +1128,7 @@ public class OpenAiApi {
 		public ChatCompletionRequest(List<ChatCompletionMessage> messages, String model, Double temperature) {
 			this(messages, model, null, null, null, null, null, null, null, null, null, null, null, null, null,
 					null, null, null, false, null, temperature, null,
-					null, null, null, null, null);
+					null, null, null, null, null, null, null);
 		}
 
 		/**
@@ -1006,7 +1142,7 @@ public class OpenAiApi {
 			this(messages, model, null, null, null, null, null, null,
 					null, null, null, List.of(OutputModality.AUDIO, OutputModality.TEXT), audio, null, null,
 					null, null, null, stream, null, null, null,
-					null, null, null, null, null);
+					null, null, null, null, null, null, null);
 		}
 
 		/**
@@ -1021,7 +1157,7 @@ public class OpenAiApi {
 		public ChatCompletionRequest(List<ChatCompletionMessage> messages, String model, Double temperature, boolean stream) {
 			this(messages, model, null, null, null, null, null, null, null, null, null,
 					null, null, null, null, null, null, null, stream, null, temperature, null,
-					null, null, null, null, null);
+					null, null, null, null, null, null, null);
 		}
 
 		/**
@@ -1037,7 +1173,7 @@ public class OpenAiApi {
 				List<FunctionTool> tools, Object toolChoice) {
 			this(messages, model, null, null, null, null, null, null, null, null, null,
 					null, null, null, null, null, null, null, false, null, 0.8, null,
-					tools, toolChoice, null, null, null);
+					tools, toolChoice, null, null, null, null, null);
 		}
 
 		/**
@@ -1050,7 +1186,7 @@ public class OpenAiApi {
 		public ChatCompletionRequest(List<ChatCompletionMessage> messages, Boolean stream) {
 			this(messages, null, null, null, null, null, null, null, null, null, null,
 					null, null, null, null, null, null, null, stream, null, null, null,
-					null, null, null, null, null);
+					null, null, null, null, null, null, null);
 		}
 
 		/**
@@ -1063,7 +1199,7 @@ public class OpenAiApi {
 			return new ChatCompletionRequest(this.messages, this.model, this.store, this.metadata, this.frequencyPenalty, this.logitBias, this.logprobs,
 			this.topLogprobs, this.maxTokens, this.maxCompletionTokens, this.n, this.outputModalities, this.audioParameters, this.presencePenalty,
 			this.responseFormat, this.seed, this.serviceTier, this.stop, this.stream, streamOptions, this.temperature, this.topP,
-			this.tools, this.toolChoice, this.parallelToolCalls, this.user, this.reasoningEffort);
+			this.tools, this.toolChoice, this.parallelToolCalls, this.user, this.reasoningEffort, this.webSearchOptions, this.verbosity);
 		}
 
 		/**
@@ -1103,6 +1239,12 @@ public class OpenAiApi {
 			public enum Voice {
 				/** Alloy voice */
 				@JsonProperty("alloy") ALLOY,
+				/** Ash voice */
+				@JsonProperty("ash") ASH,
+				/** Ballad voice */
+				@JsonProperty("ballad") BALLAD,
+				/** Coral voice */
+				@JsonProperty("coral") CORAL,
 				/** Echo voice */
 				@JsonProperty("echo") ECHO,
 				/** Fable voice */
@@ -1111,6 +1253,8 @@ public class OpenAiApi {
 				@JsonProperty("onyx") ONYX,
 				/** Nova voice */
 				@JsonProperty("nova") NOVA,
+				/** Sage voice */
+				@JsonProperty("sage") SAGE,
 				/** Shimmer voice */
 				@JsonProperty("shimmer") SHIMMER
 			}
@@ -1145,7 +1289,97 @@ public class OpenAiApi {
 
 			public static StreamOptions INCLUDE_USAGE = new StreamOptions(true);
 		}
+
+		/**
+		 * This tool searches the web for relevant results to use in a response.
+		 *
+		 * @param searchContextSize
+		 * @param userLocation
+		 */
+		@JsonInclude(Include.NON_NULL)
+		public record WebSearchOptions(@JsonProperty("search_context_size") SearchContextSize searchContextSize,
+									@JsonProperty("user_location") UserLocation userLocation) {
+
+			/**
+			 * High level guidance for the amount of context window space to use for the
+			 * search. One of low, medium, or high. medium is the default.
+			 */
+			public enum SearchContextSize {
+
+				/**
+				 * Low context size.
+				 */
+				@JsonProperty("low")
+				LOW,
+
+				/**
+				 * Medium context size. This is the default.
+				 */
+				@JsonProperty("medium")
+				MEDIUM,
+
+				/**
+				 * High context size.
+				 */
+				@JsonProperty("high")
+				HIGH
+
+			}
+
+			/**
+			 * Approximate location parameters for the search.
+			 *
+			 * @param type The type of location approximation. Always "approximate".
+			 * @param approximate The approximate location details.
+			 */
+			@JsonInclude(Include.NON_NULL)
+			public record UserLocation(@JsonProperty("type") String type,
+									@JsonProperty("approximate") Approximate approximate) {
+
+				@JsonInclude(Include.NON_NULL)
+				public record Approximate(@JsonProperty("city") String city, @JsonProperty("country") String country,
+										@JsonProperty("region") String region, @JsonProperty("timezone") String timezone) {
+				}
+			}
+
+		}
+
 	} // @formatter:on
+
+	/**
+	 * Specifies the processing type used for serving the request.
+	 */
+	public enum ServiceTier {
+
+		/**
+		 * Then the request will be processed with the service tier configured in the
+		 * Project settings.
+		 */
+		AUTO("auto"),
+		/**
+		 * Then the request will be processed with the standard pricing.
+		 */
+		DEFAULT("default"),
+		/**
+		 * Then the request will be processed with the flex pricing.
+		 */
+		FLEX("flex"),
+		/**
+		 * Then the request will be processed with the priority pricing.
+		 */
+		PRIORITY("priority");
+
+		private final String value;
+
+		ServiceTier(String value) {
+			this.value = value;
+		}
+
+		public String getValue() {
+			return this.value;
+		}
+
+	}
 
 	/**
 	 * Message comprising the conversation.
@@ -1163,19 +1397,22 @@ public class OpenAiApi {
 	 * Applicable only for {@link Role#ASSISTANT} role and null otherwise.
 	 * @param refusal The refusal message by the assistant. Applicable only for
 	 * {@link Role#ASSISTANT} role and null otherwise.
-	 * @param audioOutput Audio response from the model. >>>>>>> bdb66e577 (OpenAI -
-	 * Support audio input modality)
+	 * @param audioOutput Audio response from the model.
+	 * @param annotations Annotations for the message, when applicable, as when using the
+	 * web search tool.
 	 */
 	@JsonInclude(Include.NON_NULL)
+	@JsonIgnoreProperties(ignoreUnknown = true)
 	public record ChatCompletionMessage(// @formatter:off
 			@JsonProperty("content") Object rawContent,
 			@JsonProperty("role") Role role,
 			@JsonProperty("name") String name,
 			@JsonProperty("tool_call_id") String toolCallId,
-			@JsonProperty("tool_calls")
-			@JsonFormat(with = JsonFormat.Feature.ACCEPT_SINGLE_VALUE_AS_ARRAY) List<ToolCall> toolCalls,
+			@JsonProperty("tool_calls") @JsonFormat(with = JsonFormat.Feature.ACCEPT_SINGLE_VALUE_AS_ARRAY) List<ToolCall> toolCalls,
 			@JsonProperty("refusal") String refusal,
-			@JsonProperty("audio") AudioOutput audioOutput) { // @formatter:on
+			@JsonProperty("audio") AudioOutput audioOutput,
+			@JsonProperty("annotations") List<Annotation> annotations
+	) { // @formatter:on
 
 		/**
 		 * Create a chat completion message with the given content and role. All other
@@ -1184,8 +1421,7 @@ public class OpenAiApi {
 		 * @param role The role of the author of this message.
 		 */
 		public ChatCompletionMessage(Object content, Role role) {
-			this(content, role, null, null, null, null, null);
-
+			this(content, role, null, null, null, null, null, null);
 		}
 
 		/**
@@ -1241,18 +1477,20 @@ public class OpenAiApi {
 		 * @param inputAudio Audio content part.
 		 */
 		@JsonInclude(Include.NON_NULL)
+		@JsonIgnoreProperties(ignoreUnknown = true)
 		public record MediaContent(// @formatter:off
 			@JsonProperty("type") String type,
 			@JsonProperty("text") String text,
 			@JsonProperty("image_url") ImageUrl imageUrl,
-			@JsonProperty("input_audio") InputAudio inputAudio) { // @formatter:on
+			@JsonProperty("input_audio") InputAudio inputAudio,
+			@JsonProperty("file") InputFile inputFile) { // @formatter:on
 
 			/**
 			 * Shortcut constructor for a text content.
 			 * @param text The text content of the message.
 			 */
 			public MediaContent(String text) {
-				this("text", text, null, null);
+				this("text", text, null, null, null);
 			}
 
 			/**
@@ -1260,7 +1498,7 @@ public class OpenAiApi {
 			 * @param imageUrl The image content of the message.
 			 */
 			public MediaContent(ImageUrl imageUrl) {
-				this("image_url", null, imageUrl, null);
+				this("image_url", null, imageUrl, null, null);
 			}
 
 			/**
@@ -1268,7 +1506,15 @@ public class OpenAiApi {
 			 * @param inputAudio The audio content of the message.
 			 */
 			public MediaContent(InputAudio inputAudio) {
-				this("input_audio", null, null, inputAudio);
+				this("input_audio", null, null, inputAudio, null);
+			}
+
+			/**
+			 * Shortcut constructor for a file content
+			 * @param inputFile The file content of the message.
+			 */
+			public MediaContent(InputFile inputFile) {
+				this("file", null, null, null, inputFile);
 			}
 
 			/**
@@ -1306,6 +1552,18 @@ public class OpenAiApi {
 
 			}
 
+			/**
+			 * Constructor for base64-encoded file
+			 *
+			 * @param filename name of the file
+			 * @param fileData file data with format
+			 * "data:{mimetype};base64,{base64-encoded-image-data}".
+			 */
+			public record InputFile(@JsonProperty("filename") String filename,
+					@JsonProperty("file_data") String fileData) {
+
+			}
+
 		}
 
 		/**
@@ -1320,6 +1578,7 @@ public class OpenAiApi {
 		 * @param function The function definition.
 		 */
 		@JsonInclude(Include.NON_NULL)
+		@JsonIgnoreProperties(ignoreUnknown = true)
 		public record ToolCall(// @formatter:off
 				@JsonProperty("index") Integer index,
 				@JsonProperty("id") String id,
@@ -1340,6 +1599,7 @@ public class OpenAiApi {
 		 * function.
 		 */
 		@JsonInclude(Include.NON_NULL)
+		@JsonIgnoreProperties(ignoreUnknown = true)
 		public record ChatCompletionFunction(// @formatter:off
 				@JsonProperty("name") String name,
 				@JsonProperty("arguments") String arguments) { // @formatter:on
@@ -1355,12 +1615,36 @@ public class OpenAiApi {
 		 * @param transcript Transcript of the audio output from the model.
 		 */
 		@JsonInclude(Include.NON_NULL)
+		@JsonIgnoreProperties(ignoreUnknown = true)
 		public record AudioOutput(// @formatter:off
 				@JsonProperty("id") String id,
 				@JsonProperty("data") String data,
 				@JsonProperty("expires_at") Long expiresAt,
 				@JsonProperty("transcript") String transcript
 		) { // @formatter:on
+		}
+
+		/**
+		 * Represents an annotation within a message, specifically for URL citations.
+		 */
+		@JsonInclude(JsonInclude.Include.NON_NULL)
+		public record Annotation(@JsonProperty("type") String type,
+				@JsonProperty("url_citation") UrlCitation urlCitation) {
+			/**
+			 * A URL citation when using web search.
+			 *
+			 * @param endIndex The index of the last character of the URL citation in the
+			 * message.
+			 * @param startIndex The index of the first character of the URL citation in
+			 * the message.
+			 * @param title The title of the web resource.
+			 * @param url The URL of the web resource.
+			 */
+			@JsonInclude(JsonInclude.Include.NON_NULL)
+			public record UrlCitation(@JsonProperty("end_index") Integer endIndex,
+					@JsonProperty("start_index") Integer startIndex, @JsonProperty("title") String title,
+					@JsonProperty("url") String url) {
+			}
 		}
 	}
 
@@ -1383,6 +1667,7 @@ public class OpenAiApi {
 	 * @param usage Usage statistics for the completion request.
 	 */
 	@JsonInclude(Include.NON_NULL)
+	@JsonIgnoreProperties(ignoreUnknown = true)
 	public record ChatCompletion(// @formatter:off
 			@JsonProperty("id") String id,
 			@JsonProperty("choices") List<Choice> choices,
@@ -1403,6 +1688,7 @@ public class OpenAiApi {
 		 * @param logprobs Log probability information for the choice.
 		 */
 		@JsonInclude(Include.NON_NULL)
+		@JsonIgnoreProperties(ignoreUnknown = true)
 		public record Choice(// @formatter:off
 				@JsonProperty("finish_reason") ChatCompletionFinishReason finishReason,
 				@JsonProperty("index") Integer index,
@@ -1419,6 +1705,7 @@ public class OpenAiApi {
 	 * @param refusal A list of message refusal tokens with log probability information.
 	 */
 	@JsonInclude(Include.NON_NULL)
+	@JsonIgnoreProperties(ignoreUnknown = true)
 	public record LogProbs(@JsonProperty("content") List<Content> content,
 			@JsonProperty("refusal") List<Content> refusal) {
 
@@ -1437,6 +1724,7 @@ public class OpenAiApi {
 		 * requested top_logprobs returned.
 		 */
 		@JsonInclude(Include.NON_NULL)
+		@JsonIgnoreProperties(ignoreUnknown = true)
 		public record Content(// @formatter:off
 				@JsonProperty("token") String token,
 				@JsonProperty("logprob") Float logprob,
@@ -1455,6 +1743,7 @@ public class OpenAiApi {
 			 * is no bytes representation for the token.
 			 */
 			@JsonInclude(Include.NON_NULL)
+			@JsonIgnoreProperties(ignoreUnknown = true)
 			public record TopLogProbs(// @formatter:off
 					@JsonProperty("token") String token,
 					@JsonProperty("logprob") Float logprob,
@@ -1477,14 +1766,6 @@ public class OpenAiApi {
 	 * completion).
 	 * @param promptTokensDetails Breakdown of tokens used in the prompt.
 	 * @param completionTokenDetails Breakdown of tokens used in a completion.
-	 * @param promptCacheHitTokens Number of tokens in the prompt that were served from
-	 * (util for
-	 * <a href="https://api-docs.deepseek.com/api/create-chat-completion">DeepSeek</a>
-	 * support).
-	 * @param promptCacheMissTokens Number of tokens in the prompt that were not served
-	 * (util for
-	 * <a href="https://api-docs.deepseek.com/api/create-chat-completion">DeepSeek</a>
-	 * support).
 	 */
 	@JsonInclude(Include.NON_NULL)
 	@JsonIgnoreProperties(ignoreUnknown = true)
@@ -1493,12 +1774,11 @@ public class OpenAiApi {
 		@JsonProperty("prompt_tokens") Integer promptTokens,
 		@JsonProperty("total_tokens") Integer totalTokens,
 		@JsonProperty("prompt_tokens_details") PromptTokensDetails promptTokensDetails,
-		@JsonProperty("completion_tokens_details") CompletionTokenDetails completionTokenDetails,
-		@JsonProperty("prompt_cache_hit_tokens") Integer promptCacheHitTokens,
-		@JsonProperty("prompt_cache_miss_tokens") Integer promptCacheMissTokens) { // @formatter:on
+		@JsonProperty("completion_tokens_details") CompletionTokenDetails completionTokenDetails
+		) { // @formatter:on
 
 		public Usage(Integer completionTokens, Integer promptTokens, Integer totalTokens) {
-			this(completionTokens, promptTokens, totalTokens, null, null, null, null);
+			this(completionTokens, promptTokens, totalTokens, null, null);
 		}
 
 		/**
@@ -1508,6 +1788,7 @@ public class OpenAiApi {
 		 * @param cachedTokens Cached tokens present in the prompt.
 		 */
 		@JsonInclude(Include.NON_NULL)
+		@JsonIgnoreProperties(ignoreUnknown = true)
 		public record PromptTokensDetails(// @formatter:off
 			@JsonProperty("audio_tokens") Integer audioTokens,
 			@JsonProperty("cached_tokens") Integer cachedTokens) { // @formatter:on
@@ -1553,6 +1834,7 @@ public class OpenAiApi {
 	 * only if the StreamOptions.includeUsage is set to true.
 	 */
 	@JsonInclude(Include.NON_NULL)
+	@JsonIgnoreProperties(ignoreUnknown = true)
 	public record ChatCompletionChunk(// @formatter:off
 			@JsonProperty("id") String id,
 			@JsonProperty("choices") List<ChunkChoice> choices,
@@ -1572,6 +1854,7 @@ public class OpenAiApi {
 		 * @param logprobs Log probability information for the choice.
 		 */
 		@JsonInclude(Include.NON_NULL)
+		@JsonIgnoreProperties(ignoreUnknown = true)
 		public record ChunkChoice(// @formatter:off
 				@JsonProperty("finish_reason") ChatCompletionFinishReason finishReason,
 				@JsonProperty("index") Integer index,
@@ -1591,9 +1874,10 @@ public class OpenAiApi {
 	 * @param object The object type, which is always 'embedding'.
 	 */
 	@JsonInclude(Include.NON_NULL)
+	@JsonIgnoreProperties(ignoreUnknown = true)
 	public record Embedding(// @formatter:off
 			@JsonProperty("index") Integer index,
-			@JsonProperty("embedding") float[] embedding,
+			@JsonProperty("embedding") @JsonDeserialize(using = OpenAiEmbeddingDeserializer.class) float[] embedding,
 			@JsonProperty("object") String object) { // @formatter:on
 
 		/**
@@ -1665,6 +1949,7 @@ public class OpenAiApi {
 	 * @param usage Usage statistics for the completion request.
 	 */
 	@JsonInclude(Include.NON_NULL)
+	@JsonIgnoreProperties(ignoreUnknown = true)
 	public record EmbeddingList<T>(// @formatter:off
 			@JsonProperty("object") String object,
 			@JsonProperty("data") List<T> data,
@@ -1673,6 +1958,21 @@ public class OpenAiApi {
 	}
 
 	public static class Builder {
+
+		public Builder() {
+		}
+
+		// Copy constructor for mutate()
+		public Builder(OpenAiApi api) {
+			this.baseUrl = api.getBaseUrl();
+			this.apiKey = api.getApiKey();
+			this.headers = new LinkedMultiValueMap<>(api.getHeaders());
+			this.completionsPath = api.getCompletionsPath();
+			this.embeddingsPath = api.getEmbeddingsPath();
+			this.restClientBuilder = api.restClient != null ? api.restClient.mutate() : RestClient.builder();
+			this.webClientBuilder = api.webClient != null ? api.webClient.mutate() : WebClient.builder();
+			this.responseErrorHandler = api.getResponseErrorHandler();
+		}
 
 		private String baseUrl = OpenAiApiConstants.DEFAULT_BASE_URL;
 
@@ -1703,7 +2003,6 @@ public class OpenAiApi {
 		}
 
 		public Builder apiKey(String simpleApiKey) {
-			Assert.notNull(simpleApiKey, "simpleApiKey cannot be null");
 			this.apiKey = new SimpleApiKey(simpleApiKey);
 			return this;
 		}

@@ -35,7 +35,6 @@ import com.google.cloud.vertexai.api.GenerateContentResponse;
 import com.google.cloud.vertexai.api.GenerationConfig;
 import com.google.cloud.vertexai.api.Part;
 import com.google.cloud.vertexai.api.SafetySetting;
-import com.google.cloud.vertexai.api.Schema;
 import com.google.cloud.vertexai.api.Tool;
 import com.google.cloud.vertexai.api.Tool.GoogleSearch;
 import com.google.cloud.vertexai.generativeai.GenerativeModel;
@@ -63,7 +62,6 @@ import org.springframework.ai.chat.metadata.ChatResponseMetadata;
 import org.springframework.ai.chat.metadata.DefaultUsage;
 import org.springframework.ai.chat.metadata.EmptyUsage;
 import org.springframework.ai.chat.metadata.Usage;
-import org.springframework.ai.support.UsageCalculator;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
@@ -82,10 +80,14 @@ import org.springframework.ai.model.tool.ToolCallingChatOptions;
 import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.model.tool.ToolExecutionEligibilityPredicate;
 import org.springframework.ai.model.tool.ToolExecutionResult;
+import org.springframework.ai.model.tool.internal.ToolCallReactiveContextHolder;
 import org.springframework.ai.retry.RetryUtils;
+import org.springframework.ai.support.UsageCalculator;
 import org.springframework.ai.tool.definition.ToolDefinition;
+import org.springframework.ai.vertexai.gemini.api.VertexAiGeminiApi;
 import org.springframework.ai.vertexai.gemini.common.VertexAiGeminiConstants;
 import org.springframework.ai.vertexai.gemini.common.VertexAiGeminiSafetySetting;
+import org.springframework.ai.vertexai.gemini.schema.VertexAiSchemaConverter;
 import org.springframework.ai.vertexai.gemini.schema.VertexToolCallingManager;
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.lang.NonNull;
@@ -340,7 +342,10 @@ public class VertexAiGeminiChatModel implements ChatModel, DisposableBean {
 
 			Struct.Builder structBuilder = Struct.newBuilder();
 
-			if (rootNode.isArray()) {
+			if (rootNode.isTextual()) {
+				structBuilder.putFields("result", Value.newBuilder().setStringValue(json).build());
+			}
+			else if (rootNode.isArray()) {
 				// Handle JSON array
 				List<Value> values = new ArrayList<>();
 
@@ -365,17 +370,6 @@ public class VertexAiGeminiChatModel implements ChatModel, DisposableBean {
 			}
 
 			return structBuilder.build();
-		}
-		catch (Exception e) {
-			throw new RuntimeException(e);
-		}
-	}
-
-	private static Schema jsonToSchema(String json) {
-		try {
-			var schemaBuilder = Schema.newBuilder();
-			JsonFormat.parser().ignoringUnknownFields().merge(json, schemaBuilder);
-			return schemaBuilder.build();
 		}
 		catch (Exception e) {
 			throw new RuntimeException(e);
@@ -537,9 +531,16 @@ public class VertexAiGeminiChatModel implements ChatModel, DisposableBean {
 				Flux<ChatResponse> flux = chatResponseFlux.flatMap(response -> {
 					if (this.toolExecutionEligibilityPredicate.isToolExecutionRequired(prompt.getOptions(), response)) {
 						// FIXME: bounded elastic needs to be used since tool calling
-						// is currently only synchronous
-						return Flux.defer(() -> {
-							var toolExecutionResult = this.toolCallingManager.executeToolCalls(prompt, response);
+						//  is currently only synchronous
+						return Flux.deferContextual(ctx -> {
+							ToolExecutionResult toolExecutionResult;
+							try {
+								ToolCallReactiveContextHolder.setContext(ctx);
+								toolExecutionResult = this.toolCallingManager.executeToolCalls(prompt, response);
+							}
+							finally {
+								ToolCallReactiveContextHolder.clearContext();
+							}
 							if (toolExecutionResult.returnDirect()) {
 								// Return tool execution result directly to the client.
 								return Flux.just(ChatResponse.builder().from(response)
@@ -577,8 +578,28 @@ public class VertexAiGeminiChatModel implements ChatModel, DisposableBean {
 		int candidateIndex = candidate.getIndex();
 		FinishReason candidateFinishReason = candidate.getFinishReason();
 
+		// Convert from VertexAI protobuf to VertexAiGeminiApi DTOs
+		List<VertexAiGeminiApi.LogProbs.TopContent> topCandidates = candidate.getLogprobsResult()
+			.getTopCandidatesList()
+			.stream()
+			.filter(topCandidate -> !topCandidate.getCandidatesList().isEmpty())
+			.map(topCandidate -> new VertexAiGeminiApi.LogProbs.TopContent(topCandidate.getCandidatesList()
+				.stream()
+				.map(c -> new VertexAiGeminiApi.LogProbs.Content(c.getToken(), c.getLogProbability(), c.getTokenId()))
+				.toList()))
+			.toList();
+
+		List<VertexAiGeminiApi.LogProbs.Content> chosenCandidates = candidate.getLogprobsResult()
+			.getChosenCandidatesList()
+			.stream()
+			.map(c -> new VertexAiGeminiApi.LogProbs.Content(c.getToken(), c.getLogProbability(), c.getTokenId()))
+			.toList();
+
+		VertexAiGeminiApi.LogProbs logprobs = new VertexAiGeminiApi.LogProbs(candidate.getAvgLogprobs(), topCandidates,
+				chosenCandidates);
+
 		Map<String, Object> messageMetadata = Map.of("candidateIndex", candidateIndex, "finishReason",
-				candidateFinishReason);
+				candidateFinishReason, "logprobs", logprobs);
 
 		ChatGenerationMetadata chatGenerationMetadata = ChatGenerationMetadata.builder()
 			.finishReason(candidateFinishReason.name())
@@ -599,7 +620,11 @@ public class VertexAiGeminiChatModel implements ChatModel, DisposableBean {
 				})
 				.toList();
 
-			AssistantMessage assistantMessage = new AssistantMessage("", messageMetadata, assistantToolCalls);
+			AssistantMessage assistantMessage = AssistantMessage.builder()
+				.content("")
+				.properties(messageMetadata)
+				.toolCalls(assistantToolCalls)
+				.build();
 
 			return List.of(new Generation(assistantMessage, chatGenerationMetadata));
 		}
@@ -607,7 +632,7 @@ public class VertexAiGeminiChatModel implements ChatModel, DisposableBean {
 			List<Generation> generations = candidate.getContent()
 				.getPartsList()
 				.stream()
-				.map(part -> new AssistantMessage(part.getText(), messageMetadata))
+				.map(part -> AssistantMessage.builder().content(part.getText()).properties(messageMetadata).build())
 				.map(assistantMessage -> new Generation(assistantMessage, chatGenerationMetadata))
 				.toList();
 
@@ -666,7 +691,7 @@ public class VertexAiGeminiChatModel implements ChatModel, DisposableBean {
 				.map(toolDefinition -> FunctionDeclaration.newBuilder()
 					.setName(toolDefinition.name())
 					.setDescription(toolDefinition.description())
-					.setParameters(jsonToSchema(toolDefinition.inputSchema()))
+					.setParameters(VertexAiSchemaConverter.fromOpenApiSchema(toolDefinition.inputSchema()))
 					.build())
 				.toList();
 			tools.add(Tool.newBuilder().addAllFunctionDeclarations(functionDeclarations).build());
@@ -728,12 +753,20 @@ public class VertexAiGeminiChatModel implements ChatModel, DisposableBean {
 		if (options.getResponseMimeType() != null) {
 			generationConfigBuilder.setResponseMimeType(options.getResponseMimeType());
 		}
+		if (options.getResponseSchema() != null) {
+			generationConfigBuilder
+				.setResponseSchema(VertexAiSchemaConverter.fromOpenApiSchema(options.getResponseSchema()));
+		}
 		if (options.getFrequencyPenalty() != null) {
 			generationConfigBuilder.setFrequencyPenalty(options.getFrequencyPenalty().floatValue());
 		}
 		if (options.getPresencePenalty() != null) {
 			generationConfigBuilder.setPresencePenalty(options.getPresencePenalty().floatValue());
 		}
+		if (options.getLogprobs() != null) {
+			generationConfigBuilder.setLogprobs(options.getLogprobs());
+		}
+		generationConfigBuilder.setResponseLogprobs(options.getResponseLogprobs());
 
 		return generationConfigBuilder.build();
 	}
@@ -948,12 +981,12 @@ public class VertexAiGeminiChatModel implements ChatModel, DisposableBean {
 		 * <p>
 		 * Knowledge cutoff: January 2025
 		 * <p>
-		 * Model ID: gemini-2.5-pro-preview-03-25
+		 * Model ID: gemini-2.5-pro-preview-05-06
 		 * <p>
 		 * See: <a href=
 		 * "https://cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/2-5-pro">gemini-2.5-pro</a>
 		 */
-		GEMINI_2_5_PRO("gemini-2.5-pro-preview-03-25"),
+		GEMINI_2_5_PRO("gemini-2.5-pro-preview-05-06"),
 
 		/**
 		 * <b>gemini-2.5-flash</b> is a thinking model that offers great, well-rounded

@@ -241,7 +241,52 @@ class JsonParserTests {
 		assertThat(value).isEqualTo(new TestRecord("John", 30));
 	}
 
+	@Test
+	void fromStringToObject() {
+		String jsonString = """
+				{
+				    "name": "foo",
+				    "age": 7
+				}
+				""";
+		var value = JsonParser.toTypedObject(jsonString, TestSimpleObject.class);
+		assertThat(value).isOfAnyClassIn(TestSimpleObject.class);
+
+		TestSimpleObject testSimpleObject = (TestSimpleObject) value;
+		assertThat(testSimpleObject.name).isEqualTo("foo");
+		assertThat(testSimpleObject.age).isEqualTo(7);
+	}
+
+	@Test
+	void fromScientificNotationToInteger() {
+		var value = JsonParser.toTypedObject("1.5E7", Integer.class);
+		assertThat(value).isInstanceOf(Integer.class);
+		assertThat(value).isEqualTo(15_000_000);
+	}
+
+	@Test
+	void fromScientificNotationToLong() {
+		var value = JsonParser.toTypedObject("1.5E12", Long.class);
+		assertThat(value).isInstanceOf(Long.class);
+		assertThat(value).isEqualTo(1_500_000_000_000L);
+	}
+
+	@Test
+	void doesNotDoubleSerializeValidJsonString() {
+		String input = "[1,2,3]";
+		String result = JsonParser.toJson(input);
+		assertThat(input).isEqualTo(result);
+	}
+
 	record TestRecord(String name, Integer age) {
+	}
+
+	static class TestSimpleObject {
+
+		public String name;
+
+		public int age;
+
 	}
 
 	enum TestEnum {

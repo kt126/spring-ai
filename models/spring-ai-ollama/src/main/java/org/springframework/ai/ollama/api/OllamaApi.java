@@ -24,6 +24,7 @@ import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonInclude.Include;
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -50,12 +51,15 @@ import org.springframework.web.reactive.function.client.WebClient;
  * @author Christian Tzolov
  * @author Thomas Vitale
  * @author Jonghoon Park
+ * @author Alexandros Pappas
  * @since 0.8.0
  */
 // @formatter:off
-public class OllamaApi {
+public final class OllamaApi {
 
-	public static Builder builder() { return new Builder(); }
+	public static Builder builder() {
+		return new Builder();
+	}
 
 	public static final String REQUEST_BODY_NULL_ERROR = "The request body can not be null.";
 
@@ -73,7 +77,6 @@ public class OllamaApi {
 	 * @param responseErrorHandler Response error handler.
 	 */
 	private OllamaApi(String baseUrl, RestClient.Builder restClientBuilder, WebClient.Builder webClientBuilder, ResponseErrorHandler responseErrorHandler) {
-
 		Consumer<HttpHeaders> defaultHeaders = headers -> {
 			headers.setContentType(MediaType.APPLICATION_JSON);
 			headers.setAccept(List.of(MediaType.APPLICATION_JSON));
@@ -250,14 +253,20 @@ public class OllamaApi {
 	 * @param content The content of the message.
 	 * @param images The list of base64-encoded images to send with the message.
 	 * 				 Requires multimodal models such as llava or bakllava.
-	 * @param toolCalls The relevant tool call.
+	 * @param toolCalls The list of tools that the model wants to use.
+	 * @param toolName The name of the tool that was executed to inform the model of the result.
+	 * @param thinking The model's thinking process. Requires thinking models such as qwen3.
 	 */
 	@JsonInclude(Include.NON_NULL)
+	@JsonIgnoreProperties(ignoreUnknown = true)
 	public record Message(
 			@JsonProperty("role") Role role,
 			@JsonProperty("content") String content,
 			@JsonProperty("images") List<String> images,
-			@JsonProperty("tool_calls") List<ToolCall> toolCalls) {
+			@JsonProperty("tool_calls") List<ToolCall> toolCalls,
+			@JsonProperty("tool_name") String toolName,
+			@JsonProperty("thinking") String thinking
+	) {
 
 		public static Builder builder(Role role) {
 			return new Builder(role);
@@ -306,11 +315,19 @@ public class OllamaApi {
 		 *
 		 * @param name The name of the function.
 		 * @param arguments The arguments that the model expects you to pass to the function.
+		 * @param index The index of the function call in the list of tool calls.
 		 */
 		@JsonInclude(Include.NON_NULL)
 		public record ToolCallFunction(
 			@JsonProperty("name") String name,
-			@JsonProperty("arguments") Map<String, Object> arguments) {
+			@JsonProperty("arguments") Map<String, Object> arguments,
+			@JsonProperty("index") Integer index
+		) {
+
+			public ToolCallFunction(String name, Map<String, Object> arguments) {
+				this(name, arguments, null);
+			}
+
 		}
 
 		public static class Builder {
@@ -319,6 +336,8 @@ public class OllamaApi {
 			private String content;
 			private List<String> images;
 			private List<ToolCall> toolCalls;
+			private String toolName;
+			private String thinking;
 
 			public Builder(Role role) {
 				this.role = role;
@@ -339,8 +358,18 @@ public class OllamaApi {
 				return this;
 			}
 
+			public Builder toolName(String toolName) {
+				this.toolName = toolName;
+				return this;
+			}
+
+			public Builder thinking(String thinking) {
+				this.thinking = thinking;
+				return this;
+			}
+
 			public Message build() {
-				return new Message(this.role, this.content, this.images, this.toolCalls);
+				return new Message(this.role, this.content, this.images, this.toolCalls, this.toolName, this.thinking);
 			}
 		}
 	}
@@ -355,7 +384,8 @@ public class OllamaApi {
 	 * @param keepAlive Controls how long the model will stay loaded into memory following this request (default: 5m).
 	 * @param tools List of tools the model has access to.
 	 * @param options Model-specific options. For example, "temperature" can be set through this field, if the model supports it.
-	 * You can use the {@link OllamaOptions} builder to create the options then {@link OllamaOptions#toMap()} to convert the options into a map.
+	 * @param think Think controls whether thinking/reasoning models will think before responding.
+	 * You can use the {@link OllamaChatOptions} builder to create the options then {@link OllamaChatOptions#toMap()} to convert the options into a map.
 	 *
 	 * @see <a href=
 	 * "https://github.com/ollama/ollama/blob/main/docs/api.md#generate-a-chat-completion">Chat
@@ -371,7 +401,8 @@ public class OllamaApi {
 			@JsonProperty("format") Object format,
 			@JsonProperty("keep_alive") String keepAlive,
 			@JsonProperty("tools") List<Tool> tools,
-			@JsonProperty("options") Map<String, Object> options
+			@JsonProperty("options") Map<String, Object> options,
+			@JsonProperty("think") Boolean think
 	) {
 
 		public static Builder builder(String model) {
@@ -444,6 +475,7 @@ public class OllamaApi {
 			private String keepAlive;
 			private List<Tool> tools = List.of();
 			private Map<String, Object> options = Map.of();
+			private Boolean think;
 
 			public Builder(String model) {
 				Assert.notNull(model, "The model can not be null.");
@@ -482,14 +514,26 @@ public class OllamaApi {
 				return this;
 			}
 
+			public Builder think(Boolean think) {
+				this.think = think;
+				return this;
+			}
+
+			@Deprecated
 			public Builder options(OllamaOptions options) {
 				Objects.requireNonNull(options, "The options can not be null.");
 				this.options = OllamaOptions.filterNonSupportedFields(options.toMap());
 				return this;
 			}
 
+			public Builder options(OllamaChatOptions options) {
+				Objects.requireNonNull(options, "The options can not be null.");
+				this.options = OllamaChatOptions.filterNonSupportedFields(options.toMap());
+				return this;
+			}
+
 			public ChatRequest build() {
-				return new ChatRequest(this.model, this.messages, this.stream, this.format, this.keepAlive, this.tools, this.options);
+				return new ChatRequest(this.model, this.messages, this.stream, this.format, this.keepAlive, this.tools, this.options, this.think);
 			}
 		}
 	}
@@ -523,6 +567,7 @@ public class OllamaApi {
 	 * Types</a>
 	 */
 	@JsonInclude(Include.NON_NULL)
+	@JsonIgnoreProperties(ignoreUnknown = true)
 	public record ChatResponse(
 			@JsonProperty("model") String model,
 			@JsonProperty("created_at") Instant createdAt,
@@ -599,6 +644,7 @@ public class OllamaApi {
 	 * @param promptEvalCount The number of tokens in the prompt.
 	 */
 	@JsonInclude(Include.NON_NULL)
+	@JsonIgnoreProperties(ignoreUnknown = true)
 	public record EmbeddingsResponse(
 			@JsonProperty("model") String model,
 			@JsonProperty("embeddings") List<float[]> embeddings,
@@ -609,6 +655,7 @@ public class OllamaApi {
 	}
 
 	@JsonInclude(Include.NON_NULL)
+	@JsonIgnoreProperties(ignoreUnknown = true)
 	public record Model(
 			@JsonProperty("name") String name,
 			@JsonProperty("model") String model,
@@ -618,6 +665,7 @@ public class OllamaApi {
 			@JsonProperty("details") Details details
 	) {
 		@JsonInclude(Include.NON_NULL)
+		@JsonIgnoreProperties(ignoreUnknown = true)
 		public record Details(
 				@JsonProperty("parent_model") String parentModel,
 				@JsonProperty("format") String format,
@@ -629,6 +677,7 @@ public class OllamaApi {
 	}
 
 	@JsonInclude(Include.NON_NULL)
+	@JsonIgnoreProperties(ignoreUnknown = true)
 	public record ListModelResponse(
 			@JsonProperty("models") List<Model> models
 	) { }
@@ -646,6 +695,7 @@ public class OllamaApi {
 	}
 
 	@JsonInclude(Include.NON_NULL)
+	@JsonIgnoreProperties(ignoreUnknown = true)
 	public record ShowModelResponse(
 			@JsonProperty("license") String license,
 			@JsonProperty("modelfile") String modelfile,
@@ -692,6 +742,7 @@ public class OllamaApi {
 	}
 
 	@JsonInclude(Include.NON_NULL)
+	@JsonIgnoreProperties(ignoreUnknown = true)
 	public record ProgressResponse(
 			@JsonProperty("status") String status,
 			@JsonProperty("digest") String digest,

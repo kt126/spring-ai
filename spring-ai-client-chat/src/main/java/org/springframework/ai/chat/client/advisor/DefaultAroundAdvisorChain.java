@@ -23,17 +23,14 @@ import java.util.concurrent.ConcurrentLinkedDeque;
 
 import io.micrometer.observation.ObservationRegistry;
 import io.micrometer.observation.contextpropagation.ObservationThreadLocalAccessor;
+import reactor.core.publisher.Flux;
+
 import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.client.advisor.api.Advisor;
 import org.springframework.ai.chat.client.advisor.api.BaseAdvisorChain;
 import org.springframework.ai.chat.client.advisor.api.CallAdvisor;
 import org.springframework.ai.chat.client.advisor.api.StreamAdvisor;
-import org.springframework.ai.template.TemplateRenderer;
-import org.springframework.ai.template.st.StTemplateRenderer;
-import org.springframework.lang.Nullable;
-import reactor.core.publisher.Flux;
-
 import org.springframework.ai.chat.client.advisor.observation.AdvisorObservationContext;
 import org.springframework.ai.chat.client.advisor.observation.AdvisorObservationConvention;
 import org.springframework.ai.chat.client.advisor.observation.AdvisorObservationDocumentation;
@@ -56,8 +53,6 @@ public class DefaultAroundAdvisorChain implements BaseAdvisorChain {
 
 	public static final AdvisorObservationConvention DEFAULT_OBSERVATION_CONVENTION = new DefaultAdvisorObservationConvention();
 
-	private static final TemplateRenderer DEFAULT_TEMPLATE_RENDERER = StTemplateRenderer.builder().build();
-
 	private final List<CallAdvisor> originalCallAdvisors;
 
 	private final List<StreamAdvisor> originalStreamAdvisors;
@@ -68,17 +63,14 @@ public class DefaultAroundAdvisorChain implements BaseAdvisorChain {
 
 	private final ObservationRegistry observationRegistry;
 
-	private final TemplateRenderer templateRenderer;
-
-	DefaultAroundAdvisorChain(ObservationRegistry observationRegistry, @Nullable TemplateRenderer templateRenderer,
-			Deque<CallAdvisor> callAdvisors, Deque<StreamAdvisor> streamAdvisors) {
+	DefaultAroundAdvisorChain(ObservationRegistry observationRegistry, Deque<CallAdvisor> callAdvisors,
+			Deque<StreamAdvisor> streamAdvisors) {
 
 		Assert.notNull(observationRegistry, "the observationRegistry must be non-null");
 		Assert.notNull(callAdvisors, "the callAdvisors must be non-null");
 		Assert.notNull(streamAdvisors, "the streamAdvisors must be non-null");
 
 		this.observationRegistry = observationRegistry;
-		this.templateRenderer = templateRenderer != null ? templateRenderer : DEFAULT_TEMPLATE_RENDERER;
 		this.callAdvisors = callAdvisors;
 		this.streamAdvisors = streamAdvisors;
 		this.originalCallAdvisors = List.copyOf(callAdvisors);
@@ -164,17 +156,10 @@ public class DefaultAroundAdvisorChain implements BaseAdvisorChain {
 
 		private final Deque<StreamAdvisor> streamAdvisors;
 
-		private TemplateRenderer templateRenderer;
-
 		public Builder(ObservationRegistry observationRegistry) {
 			this.observationRegistry = observationRegistry;
 			this.callAdvisors = new ConcurrentLinkedDeque<>();
 			this.streamAdvisors = new ConcurrentLinkedDeque<>();
-		}
-
-		public Builder templateRenderer(TemplateRenderer templateRenderer) {
-			this.templateRenderer = templateRenderer;
-			return this;
 		}
 
 		public Builder push(Advisor advisor) {
@@ -225,8 +210,7 @@ public class DefaultAroundAdvisorChain implements BaseAdvisorChain {
 		}
 
 		public DefaultAroundAdvisorChain build() {
-			return new DefaultAroundAdvisorChain(this.observationRegistry, this.templateRenderer, this.callAdvisors,
-					this.streamAdvisors);
+			return new DefaultAroundAdvisorChain(this.observationRegistry, this.callAdvisors, this.streamAdvisors);
 		}
 
 	}

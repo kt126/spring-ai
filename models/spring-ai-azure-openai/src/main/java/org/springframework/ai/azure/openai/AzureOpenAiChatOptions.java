@@ -1,5 +1,5 @@
 /*
- * Copyright 2023-2024 the original author or authors.
+ * Copyright 2023-2025 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -31,6 +31,8 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonInclude.Include;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import org.springframework.ai.model.tool.ToolCallingChatOptions;
 import org.springframework.ai.tool.ToolCallback;
@@ -52,8 +54,26 @@ import org.springframework.util.Assert;
 @JsonInclude(Include.NON_NULL)
 public class AzureOpenAiChatOptions implements ToolCallingChatOptions {
 
+	private static final Logger logger = LoggerFactory.getLogger(AzureOpenAiChatOptions.class);
+
 	/**
-	 * The maximum number of tokens to generate.
+	 * The maximum number of tokens to generate in the chat completion. The total length
+	 * of input tokens and generated tokens is limited by the model's context length.
+	 *
+	 * <p>
+	 * <strong>Model-specific usage:</strong>
+	 * </p>
+	 * <ul>
+	 * <li><strong>Use for non-reasoning models</strong> (e.g., gpt-4o,
+	 * gpt-3.5-turbo)</li>
+	 * <li><strong>Cannot be used with reasoning models</strong> (e.g., o1, o3, o4-mini
+	 * series)</li>
+	 * </ul>
+	 *
+	 * <p>
+	 * <strong>Mutual exclusivity:</strong> This parameter cannot be used together with
+	 * {@link #maxCompletionTokens}. Setting both will result in an API error.
+	 * </p>
 	 */
 	@JsonProperty("max_tokens")
 	private Integer maxTokens;
@@ -167,6 +187,28 @@ public class AzureOpenAiChatOptions implements ToolCallingChatOptions {
 	@JsonProperty("top_log_probs")
 	private Integer topLogProbs;
 
+	/**
+	 * An upper bound for the number of tokens that can be generated for a completion,
+	 * including visible output tokens and reasoning tokens.
+	 *
+	 * <p>
+	 * <strong>Model-specific usage:</strong>
+	 * </p>
+	 * <ul>
+	 * <li><strong>Required for reasoning models</strong> (e.g., o1, o3, o4-mini
+	 * series)</li>
+	 * <li><strong>Cannot be used with non-reasoning models</strong> (e.g., gpt-4o,
+	 * gpt-3.5-turbo)</li>
+	 * </ul>
+	 *
+	 * <p>
+	 * <strong>Mutual exclusivity:</strong> This parameter cannot be used together with
+	 * {@link #maxTokens}. Setting both will result in an API error.
+	 * </p>
+	 */
+	@JsonProperty("max_completion_tokens")
+	private Integer maxCompletionTokens;
+
 	/*
 	 * If provided, the configuration options for available Azure OpenAI chat
 	 * enhancements.
@@ -206,6 +248,15 @@ public class AzureOpenAiChatOptions implements ToolCallingChatOptions {
 	 */
 	@JsonIgnore
 	private Boolean enableStreamUsage;
+
+	/**
+	 * Constrains effort on reasoning for reasoning models. Currently supported values are
+	 * low, medium, and high. Reducing reasoning effort can result in faster responses and
+	 * fewer tokens used on reasoning in a response. Optional. Defaults to medium. Only
+	 * for reasoning models.
+	 */
+	@JsonProperty("reasoning_effort")
+	private String reasoningEffort;
 
 	@Override
 	@JsonIgnore
@@ -257,6 +308,7 @@ public class AzureOpenAiChatOptions implements ToolCallingChatOptions {
 			.frequencyPenalty(fromOptions.getFrequencyPenalty() != null ? fromOptions.getFrequencyPenalty() : null)
 			.logitBias(fromOptions.getLogitBias())
 			.maxTokens(fromOptions.getMaxTokens())
+			.maxCompletionTokens(fromOptions.getMaxCompletionTokens())
 			.N(fromOptions.getN())
 			.presencePenalty(fromOptions.getPresencePenalty() != null ? fromOptions.getPresencePenalty() : null)
 			.stop(fromOptions.getStop() != null ? new ArrayList<>(fromOptions.getStop()) : null)
@@ -268,6 +320,7 @@ public class AzureOpenAiChatOptions implements ToolCallingChatOptions {
 			.toolNames(fromOptions.getToolNames() != null ? new HashSet<>(fromOptions.getToolNames()) : null)
 			.responseFormat(fromOptions.getResponseFormat())
 			.streamUsage(fromOptions.getStreamUsage())
+			.reasoningEffort(fromOptions.getReasoningEffort())
 			.seed(fromOptions.getSeed())
 			.logprobs(fromOptions.isLogprobs())
 			.topLogprobs(fromOptions.getTopLogProbs())
@@ -275,9 +328,6 @@ public class AzureOpenAiChatOptions implements ToolCallingChatOptions {
 			.toolContext(fromOptions.getToolContext() != null ? new HashMap<>(fromOptions.getToolContext()) : null)
 			.internalToolExecutionEnabled(fromOptions.getInternalToolExecutionEnabled())
 			.streamOptions(fromOptions.getStreamOptions())
-			.toolCallbacks(
-					fromOptions.getToolCallbacks() != null ? new ArrayList<>(fromOptions.getToolCallbacks()) : null)
-			.toolNames(fromOptions.getToolNames() != null ? new HashSet<>(fromOptions.getToolNames()) : null)
 			.build();
 	}
 
@@ -288,6 +338,14 @@ public class AzureOpenAiChatOptions implements ToolCallingChatOptions {
 
 	public void setMaxTokens(Integer maxTokens) {
 		this.maxTokens = maxTokens;
+	}
+
+	public Integer getMaxCompletionTokens() {
+		return this.maxCompletionTokens;
+	}
+
+	public void setMaxCompletionTokens(Integer maxCompletionTokens) {
+		this.maxCompletionTokens = maxCompletionTokens;
 	}
 
 	public Map<String, Integer> getLogitBias() {
@@ -408,6 +466,14 @@ public class AzureOpenAiChatOptions implements ToolCallingChatOptions {
 		this.enableStreamUsage = enableStreamUsage;
 	}
 
+	public String getReasoningEffort() {
+		return this.reasoningEffort;
+	}
+
+	public void setReasoningEffort(String reasoningEffort) {
+		this.reasoningEffort = reasoningEffort;
+	}
+
 	@Override
 	@JsonIgnore
 	public Integer getTopK() {
@@ -490,7 +556,9 @@ public class AzureOpenAiChatOptions implements ToolCallingChatOptions {
 				&& Objects.equals(this.enhancements, that.enhancements)
 				&& Objects.equals(this.streamOptions, that.streamOptions)
 				&& Objects.equals(this.enableStreamUsage, that.enableStreamUsage)
+				&& Objects.equals(this.reasoningEffort, that.reasoningEffort)
 				&& Objects.equals(this.toolContext, that.toolContext) && Objects.equals(this.maxTokens, that.maxTokens)
+				&& Objects.equals(this.maxCompletionTokens, that.maxCompletionTokens)
 				&& Objects.equals(this.frequencyPenalty, that.frequencyPenalty)
 				&& Objects.equals(this.presencePenalty, that.presencePenalty)
 				&& Objects.equals(this.temperature, that.temperature) && Objects.equals(this.topP, that.topP);
@@ -500,8 +568,9 @@ public class AzureOpenAiChatOptions implements ToolCallingChatOptions {
 	public int hashCode() {
 		return Objects.hash(this.logitBias, this.user, this.n, this.stop, this.deploymentName, this.responseFormat,
 				this.toolCallbacks, this.toolNames, this.internalToolExecutionEnabled, this.seed, this.logprobs,
-				this.topLogProbs, this.enhancements, this.streamOptions, this.enableStreamUsage, this.toolContext,
-				this.maxTokens, this.frequencyPenalty, this.presencePenalty, this.temperature, this.topP);
+				this.topLogProbs, this.enhancements, this.streamOptions, this.reasoningEffort, this.enableStreamUsage,
+				this.toolContext, this.maxTokens, this.maxCompletionTokens, this.frequencyPenalty, this.presencePenalty,
+				this.temperature, this.topP);
 	}
 
 	public static class Builder {
@@ -531,8 +600,73 @@ public class AzureOpenAiChatOptions implements ToolCallingChatOptions {
 			return this;
 		}
 
+		/**
+		 * Sets the maximum number of tokens to generate in the chat completion. The total
+		 * length of input tokens and generated tokens is limited by the model's context
+		 * length.
+		 *
+		 * <p>
+		 * <strong>Model-specific usage:</strong>
+		 * </p>
+		 * <ul>
+		 * <li><strong>Use for non-reasoning models</strong> (e.g., gpt-4o,
+		 * gpt-3.5-turbo)</li>
+		 * <li><strong>Cannot be used with reasoning models</strong> (e.g., o1, o3,
+		 * o4-mini series)</li>
+		 * </ul>
+		 *
+		 * <p>
+		 * <strong>Mutual exclusivity:</strong> This parameter cannot be used together
+		 * with {@link #maxCompletionTokens(Integer)}. If both are set, the last one set
+		 * will be used and the other will be cleared with a warning.
+		 * </p>
+		 * @param maxTokens the maximum number of tokens to generate, or null to unset
+		 * @return this builder instance
+		 */
 		public Builder maxTokens(Integer maxTokens) {
+			if (maxTokens != null && this.options.maxCompletionTokens != null) {
+				logger
+					.warn("Both maxTokens and maxCompletionTokens are set. Azure OpenAI API does not support setting both parameters simultaneously. "
+							+ "The previously set maxCompletionTokens ({}) will be cleared and maxTokens ({}) will be used.",
+							this.options.maxCompletionTokens, maxTokens);
+				this.options.maxCompletionTokens = null;
+			}
 			this.options.maxTokens = maxTokens;
+			return this;
+		}
+
+		/**
+		 * Sets an upper bound for the number of tokens that can be generated for a
+		 * completion, including visible output tokens and reasoning tokens.
+		 *
+		 * <p>
+		 * <strong>Model-specific usage:</strong>
+		 * </p>
+		 * <ul>
+		 * <li><strong>Required for reasoning models</strong> (e.g., o1, o3, o4-mini
+		 * series)</li>
+		 * <li><strong>Cannot be used with non-reasoning models</strong> (e.g., gpt-4o,
+		 * gpt-3.5-turbo)</li>
+		 * </ul>
+		 *
+		 * <p>
+		 * <strong>Mutual exclusivity:</strong> This parameter cannot be used together
+		 * with {@link #maxTokens(Integer)}. If both are set, the last one set will be
+		 * used and the other will be cleared with a warning.
+		 * </p>
+		 * @param maxCompletionTokens the maximum number of completion tokens to generate,
+		 * or null to unset
+		 * @return this builder instance
+		 */
+		public Builder maxCompletionTokens(Integer maxCompletionTokens) {
+			if (maxCompletionTokens != null && this.options.maxTokens != null) {
+				logger
+					.warn("Both maxTokens and maxCompletionTokens are set. Azure OpenAI API does not support setting both parameters simultaneously. "
+							+ "The previously set maxTokens ({}) will be cleared and maxCompletionTokens ({}) will be used.",
+							this.options.maxTokens, maxCompletionTokens);
+				this.options.maxTokens = null;
+			}
+			this.options.maxCompletionTokens = maxCompletionTokens;
 			return this;
 		}
 
@@ -573,6 +707,11 @@ public class AzureOpenAiChatOptions implements ToolCallingChatOptions {
 
 		public Builder streamUsage(Boolean enableStreamUsage) {
 			this.options.enableStreamUsage = enableStreamUsage;
+			return this;
+		}
+
+		public Builder reasoningEffort(String reasoningEffort) {
+			this.options.reasoningEffort = reasoningEffort;
 			return this;
 		}
 
