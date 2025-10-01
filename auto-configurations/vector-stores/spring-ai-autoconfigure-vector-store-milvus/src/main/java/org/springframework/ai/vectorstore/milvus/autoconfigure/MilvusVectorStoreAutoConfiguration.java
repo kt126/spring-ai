@@ -56,7 +56,7 @@ public class MilvusVectorStoreAutoConfiguration {
 
 	@Bean
 	@ConditionalOnMissingBean(MilvusServiceClientConnectionDetails.class)
-	PropertiesMilvusServiceClientConnectionDetails milvusServiceClientConnectionDetails(
+	MilvusServiceClientConnectionDetails milvusServiceClientConnectionDetails(
 			MilvusServiceClientProperties properties) {
 		return new PropertiesMilvusServiceClientConnectionDetails(properties);
 	}
@@ -96,11 +96,11 @@ public class MilvusVectorStoreAutoConfiguration {
 	@Bean
 	@ConditionalOnMissingBean
 	public MilvusServiceClient milvusClient(MilvusVectorStoreProperties serverProperties,
-			MilvusServiceClientProperties clientProperties, MilvusServiceClientConnectionDetails connectionDetails) {
+			MilvusServiceClientProperties clientProperties) {
 
 		var builder = ConnectParam.newBuilder()
-			.withHost(connectionDetails.getHost())
-			.withPort(connectionDetails.getPort())
+			.withHost(clientProperties.getHost())
+			.withPort(clientProperties.getPort())
 			.withDatabaseName(serverProperties.getDatabaseName())
 			.withConnectTimeout(clientProperties.getConnectTimeoutMs(), TimeUnit.MILLISECONDS)
 			.withKeepAliveTime(clientProperties.getKeepAliveTimeMs(), TimeUnit.MILLISECONDS)

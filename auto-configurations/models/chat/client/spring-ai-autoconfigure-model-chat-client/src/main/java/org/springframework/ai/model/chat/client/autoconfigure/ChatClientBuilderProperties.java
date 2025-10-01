@@ -56,6 +56,7 @@ public class ChatClientBuilderProperties {
 
 		/**
 		 * Whether to include the prompt content in the observations.
+		 * 可观测性：是否记录提示词
 		 */
 		private boolean includePrompt = false;
 

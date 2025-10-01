@@ -451,6 +451,8 @@
 					<compilerArgs>
 						<compilerArg>-parameters</compilerArg>
 					</compilerArgs>
+					<source>${java.version}</source>
+					<target>${java.version}</target>
 				</configuration>
 				<executions>
 					<!-- Replacing default-compile as it is treated specially by Maven -->
@@ -899,6 +901,14 @@
 			</build>
 		</profile>
 	</profiles>
+	<dependencies>
+		<dependency>
+			<groupId>io.modelcontextprotocol.sdk</groupId>
+			<artifactId>mcp-bom</artifactId>
+			<version>${mcp.sdk.version}</version>
+			<type>pom</type>
+		</dependency>
+	</dependencies>
 
 	<dependencyManagement>
 		<dependencies>
