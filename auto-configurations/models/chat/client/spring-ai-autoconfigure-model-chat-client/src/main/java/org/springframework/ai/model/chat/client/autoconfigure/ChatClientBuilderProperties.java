@@ -55,9 +55,8 @@ public class ChatClientBuilderProperties {
 	public static class Observations {
 
 		/**
-		 * Whether to log the prompt content in the observations.
-		 * Whether to include the prompt content in the observations.
-		 * 可观测性：是否记录提示词
+		 * Whether to log the prompt content in the observations. Whether to include the
+		 * prompt content in the observations. 可观测性：是否记录提示词
 		 */
 		private boolean logPrompt = false;
 
