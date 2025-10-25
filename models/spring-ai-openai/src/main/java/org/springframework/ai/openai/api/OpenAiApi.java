@@ -16,8 +16,10 @@
 
 package org.springframework.ai.openai.api;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
@@ -68,6 +70,10 @@ import org.springframework.web.reactive.function.client.WebClient;
  */
 public class OpenAiApi {
 
+	public static final String HTTP_USER_AGENT_HEADER = "User-Agent";
+
+	public static final String SPRING_AI_USER_AGENT = "spring-ai";
+
 	/**
 	 * Returns a builder pre-populated with the current configuration for mutation.
 	 */
@@ -84,6 +90,12 @@ public class OpenAiApi {
 	public static final String DEFAULT_EMBEDDING_MODEL = EmbeddingModel.TEXT_EMBEDDING_ADA_002.getValue();
 
 	private static final Predicate<String> SSE_DONE_PREDICATE = "[DONE]"::equals;
+
+	private static final String REQUEST_BODY_NULL_MESSAGE = "The request body can not be null.";
+
+	private static final String STREAM_FALSE_MESSAGE = "Request must set the stream property to false.";
+
+	private static final String ADDITIONAL_HEADERS_NULL_MESSAGE = "The additional HTTP headers can not be null.";
 
 	// Store config fields for mutate/copy
 	private final String baseUrl;
@@ -132,6 +144,7 @@ public class OpenAiApi {
 		// @formatter:off
 		Consumer<HttpHeaders> finalHeaders = h -> {
 			h.setContentType(MediaType.APPLICATION_JSON);
+			h.set(HTTP_USER_AGENT_HEADER, SPRING_AI_USER_AGENT);
 			h.addAll(headers);
 		};
 		this.restClient = restClientBuilder.clone()
@@ -183,9 +196,9 @@ public class OpenAiApi {
 	public ResponseEntity<ChatCompletion> chatCompletionEntity(ChatCompletionRequest chatRequest,
 			MultiValueMap<String, String> additionalHttpHeader) {
 
-		Assert.notNull(chatRequest, "The request body can not be null.");
-		Assert.isTrue(!chatRequest.stream(), "Request must set the stream property to false.");
-		Assert.notNull(additionalHttpHeader, "The additional HTTP headers can not be null.");
+		Assert.notNull(chatRequest, REQUEST_BODY_NULL_MESSAGE);
+		Assert.isTrue(!chatRequest.stream(), STREAM_FALSE_MESSAGE);
+		Assert.notNull(additionalHttpHeader, ADDITIONAL_HEADERS_NULL_MESSAGE);
 
 		// @formatter:off
 		return this.restClient.post()
@@ -221,7 +234,7 @@ public class OpenAiApi {
 	public Flux<ChatCompletionChunk> chatCompletionStream(ChatCompletionRequest chatRequest,
 			MultiValueMap<String, String> additionalHttpHeader) {
 
-		Assert.notNull(chatRequest, "The request body can not be null.");
+		Assert.notNull(chatRequest, REQUEST_BODY_NULL_MESSAGE);
 		Assert.isTrue(chatRequest.stream(), "Request must set the stream property to true.");
 
 		AtomicBoolean isInsideTool = new AtomicBoolean(false);
@@ -284,7 +297,7 @@ public class OpenAiApi {
 	 */
 	public <T> ResponseEntity<EmbeddingList<Embedding>> embeddings(EmbeddingRequest<T> embeddingRequest) {
 
-		Assert.notNull(embeddingRequest, "The request body can not be null.");
+		Assert.notNull(embeddingRequest, REQUEST_BODY_NULL_MESSAGE);
 
 		// Input text to embed, encoded as a string or array of tokens. To embed multiple
 		// inputs in a single
@@ -296,7 +309,7 @@ public class OpenAiApi {
 		// The input must not exceed the max input tokens for the model (8192 tokens for
 		// text-embedding-ada-002), cannot
 		// be an empty string, and any array must be 2048 dimensions or less.
-		if (embeddingRequest.input() instanceof List list) {
+		if (embeddingRequest.input() instanceof List<?> list) {
 			Assert.isTrue(!CollectionUtils.isEmpty(list), "The input list can not be empty.");
 			Assert.isTrue(list.size() <= 2048, "The list must be 2048 dimensions or less");
 			Assert.isTrue(
@@ -1218,7 +1231,7 @@ public class OpenAiApi {
 			/**
 			 * Specifying a particular function forces the model to call that function.
 			 */
-			public static Object FUNCTION(String functionName) {
+			public static Object function(String functionName) {
 				return Map.of("type", "function", "function", Map.of("name", functionName));
 			}
 		}
@@ -1877,7 +1890,9 @@ public class OpenAiApi {
 	@JsonIgnoreProperties(ignoreUnknown = true)
 	public record Embedding(// @formatter:off
 			@JsonProperty("index") Integer index,
-			@JsonProperty("embedding") @JsonDeserialize(using = OpenAiEmbeddingDeserializer.class) float[] embedding,
+		@JsonProperty("embedding")
+			@JsonDeserialize(using = OpenAiEmbeddingDeserializer.class)
+			float[] embedding,
 			@JsonProperty("object") String object) { // @formatter:on
 
 		/**
@@ -1889,6 +1904,25 @@ public class OpenAiApi {
 		 */
 		public Embedding(Integer index, float[] embedding) {
 			this(index, embedding, "embedding");
+		}
+
+		@Override
+		public boolean equals(Object o) {
+			if (this == o) {
+				return true;
+			}
+			if (!(o instanceof Embedding other)) {
+				return false;
+			}
+			return Objects.equals(this.index, other.index) && Arrays.equals(this.embedding, other.embedding)
+					&& Objects.equals(this.object, other.object);
+		}
+
+		@Override
+		public int hashCode() {
+			int result = Objects.hash(this.index, this.object);
+			result = 31 * result + Arrays.hashCode(this.embedding);
+			return result;
 		}
 
 	}
@@ -1957,7 +1991,7 @@ public class OpenAiApi {
 			@JsonProperty("usage") Usage usage) { // @formatter:on
 	}
 
-	public static class Builder {
+	public static final class Builder {
 
 		public Builder() {
 		}

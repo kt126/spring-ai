@@ -38,7 +38,7 @@ import org.springaicommunity.mcp.provider.changed.tool.SyncMcpToolListChangedPro
 import org.springaicommunity.mcp.provider.complete.SyncMcpCompleteProvider;
 import org.springaicommunity.mcp.provider.complete.SyncStatelessMcpCompleteProvider;
 import org.springaicommunity.mcp.provider.elicitation.SyncMcpElicitationProvider;
-import org.springaicommunity.mcp.provider.logging.SyncMcpLogginProvider;
+import org.springaicommunity.mcp.provider.logging.SyncMcpLoggingProvider;
 import org.springaicommunity.mcp.provider.progress.SyncMcpProgressProvider;
 import org.springaicommunity.mcp.provider.prompt.SyncMcpPromptProvider;
 import org.springaicommunity.mcp.provider.prompt.SyncStatelessMcpPromptProvider;
@@ -162,7 +162,7 @@ public final class SyncMcpAnnotationProviders {
 			return AnnotationProviderUtil.beanMethods(bean);
 		}
 
-	};
+	}
 
 	private final static class SpringAiSyncStatelessMcpCompleteProvider extends SyncStatelessMcpCompleteProvider {
 
@@ -175,7 +175,7 @@ public final class SyncMcpAnnotationProviders {
 			return AnnotationProviderUtil.beanMethods(bean);
 		}
 
-	};
+	}
 
 	// TOOL
 	private final static class SpringAiSyncToolProvider extends SyncMcpToolProvider {
@@ -216,7 +216,7 @@ public final class SyncMcpAnnotationProviders {
 			return AnnotationProviderUtil.beanMethods(bean);
 		}
 
-	};
+	}
 
 	private final static class SpringAiSyncStatelessPromptProvider extends SyncStatelessMcpPromptProvider {
 
@@ -259,7 +259,7 @@ public final class SyncMcpAnnotationProviders {
 	}
 
 	// LOGGING (CLIENT)
-	private final static class SpringAiSyncMcpLoggingProvider extends SyncMcpLogginProvider {
+	private final static class SpringAiSyncMcpLoggingProvider extends SyncMcpLoggingProvider {
 
 		private SpringAiSyncMcpLoggingProvider(List<Object> loggingObjects) {
 			super(loggingObjects);

@@ -74,8 +74,8 @@ import org.springframework.web.reactive.function.server.RouterFunction;
  * @see WebFluxSseServerTransportProvider
  */
 @AutoConfiguration(before = McpServerAutoConfiguration.class)
-@EnableConfigurationProperties({ McpServerSseProperties.class })
-@ConditionalOnClass({ WebFluxSseServerTransportProvider.class })
+@EnableConfigurationProperties(McpServerSseProperties.class)
+@ConditionalOnClass(WebFluxSseServerTransportProvider.class)
 @ConditionalOnMissingBean(McpServerTransportProvider.class)
 @Conditional({ McpServerStdioDisabledCondition.class, McpServerAutoConfiguration.EnabledSseServerCondition.class })
 public class McpServerSseWebFluxAutoConfiguration {
@@ -99,7 +99,8 @@ public class McpServerSseWebFluxAutoConfiguration {
 	// Router function for SSE transport used by Spring WebFlux to start an HTTP
 	// server.
 	@Bean
-	public RouterFunction<?> webfluxMcpRouterFunction(WebFluxSseServerTransportProvider webFluxProvider) {
+	@ConditionalOnMissingBean(name = "webfluxSseServerRouterFunction")
+	public RouterFunction<?> webfluxSseServerRouterFunction(WebFluxSseServerTransportProvider webFluxProvider) {
 		return webFluxProvider.getRouterFunction();
 	}
 

@@ -284,7 +284,7 @@ public class ZhiPuAiApi {
 			})
 			.concatMapIterable(window -> {
 				Mono<ChatCompletionChunk> monoChunk = window
-					.reduce(new ChatCompletionChunk(null, null, null, null, null, null), this.chunkMerger::merge);
+					.reduce(new ChatCompletionChunk(null, null, null, null, null, null, null), this.chunkMerger::merge);
 				return List.of(monoChunk);
 			})
 			.flatMap(mono -> mono);
@@ -367,6 +367,8 @@ public class ZhiPuAiApi {
 	public enum ChatModel implements ChatModelDescription {
 
 		// @formatter:off
+		GLM_4_6("glm-4.6"),
+
 		GLM_4_5("glm-4.5"),
 
 		GLM_4_5_X("glm-4.5-x"),
@@ -1108,7 +1110,8 @@ public class ZhiPuAiApi {
 			@JsonProperty("created") Long created,
 			@JsonProperty("model") String model,
 			@JsonProperty("system_fingerprint") String systemFingerprint,
-			@JsonProperty("object") String object) { // @formatter:on
+			@JsonProperty("object") String object,
+			@JsonProperty("usage") Usage usage) { // @formatter:on
 
 		/**
 		 * Chat completion choice.
@@ -1205,7 +1208,7 @@ public class ZhiPuAiApi {
 			@JsonProperty("usage") Usage usage) { // @formatter:on
 	}
 
-	public static class Builder {
+	public static final class Builder {
 
 		private Builder() {
 		}

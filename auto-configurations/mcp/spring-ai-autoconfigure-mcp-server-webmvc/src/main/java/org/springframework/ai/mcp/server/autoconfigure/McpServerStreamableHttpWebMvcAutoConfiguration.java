@@ -33,12 +33,14 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Conditional;
 import org.springframework.web.servlet.function.RouterFunction;
+import org.springframework.web.servlet.function.ServerResponse;
 
 /**
  * @author Christian Tzolov
+ * @author Yanming Zhou
  */
 @AutoConfiguration(before = McpServerAutoConfiguration.class)
-@ConditionalOnClass({ McpSchema.class })
+@ConditionalOnClass(McpSchema.class)
 @EnableConfigurationProperties({ McpServerProperties.class, McpServerStreamableHttpProperties.class })
 @Conditional({ McpServerStdioDisabledCondition.class,
 		McpServerAutoConfiguration.EnabledStreamableServerCondition.class })
@@ -62,7 +64,8 @@ public class McpServerStreamableHttpWebMvcAutoConfiguration {
 	// Router function for streamable http transport used by Spring WebFlux to start an
 	// HTTP server.
 	@Bean
-	public RouterFunction<?> webMvcStreamableServerRouterFunction(
+	@ConditionalOnMissingBean(name = "webMvcStreamableServerRouterFunction")
+	public RouterFunction<ServerResponse> webMvcStreamableServerRouterFunction(
 			WebMvcStreamableServerTransportProvider webMvcProvider) {
 		return webMvcProvider.getRouterFunction();
 	}
